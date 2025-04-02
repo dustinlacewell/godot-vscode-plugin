@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
+import { Logger } from "./logger";
 
 export function get_editor_data_dir(): string {
 	// from: https://stackoverflow.com/a/26227660
@@ -111,9 +112,23 @@ export function find_project_file(start: string, depth = 20) {
 	return find_project_file(folder, depth - 1);
 }
 
-export async function convert_resource_path_to_uri(resPath: string): Promise<vscode.Uri | null> {
+export async function convert_resource_path_to_uri(
+	resPath: string, 
+	logger?: Logger
+): Promise<vscode.Uri | null> {
 	const dir = await get_project_dir();
-	return vscode.Uri.joinPath(vscode.Uri.file(dir), resPath.substring("res://".length));
+	if (logger) {
+		logger.warn(`Converting resource path to URI:
+			Dir: ${dir}
+			ResPath: ${resPath}
+			OS: ${os.platform()}
+		`);
+	}
+	const uri = vscode.Uri.joinPath(vscode.Uri.file(dir), resPath.substring("res://".length));
+	if (logger) {
+		logger.warn(`Generated URI: ${uri.toString()}`);
+	}
+	return uri;
 }
 
 export async function convert_uri_to_resource_path(uri: vscode.Uri): Promise<string | null> {

@@ -31,7 +31,7 @@ export class GDHoverProvider implements HoverProvider {
 	async get_links(text: string): Promise<string> {
 		let links = "";
 		for (const match of text.matchAll(/res:\/\/[^"^']*/g)) {
-			const uri = await convert_resource_path_to_uri(match[0]);
+			const uri = await convert_resource_path_to_uri(match[0], log);
 			if (uri instanceof Uri) {
 				links += `* [${match[0]}](${uri})\n`;
 			}
@@ -55,7 +55,7 @@ export class GDHoverProvider implements HoverProvider {
 
 				const contents = new MarkdownString();
 				contents.appendMarkdown(links);
-				const uri = await convert_resource_path_to_uri(resource.path);
+				const uri = await convert_resource_path_to_uri(resource.path, log);
 				contents.appendMarkdown("\n---\n");
 				contents.appendCodeblock(definition, "gdresource");
 				if (resource.type === "Texture") {
@@ -105,7 +105,7 @@ export class GDHoverProvider implements HoverProvider {
 				return;
 			}
 
-			const uri = await convert_resource_path_to_uri(link);
+			const uri = await convert_resource_path_to_uri(link, log);
 			const contents = new MarkdownString();
 			if (type === "image") {
 				contents.appendMarkdown(`<img src="${uri}" min-width=100px max-width=500px/>`);

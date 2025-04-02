@@ -12,7 +12,7 @@ import {
 } from "vscode-languageclient/node";
 
 import { globals } from "../extension";
-import { createLogger, get_configuration, get_project_dir } from "../utils";
+import { createLogger, get_configuration, get_project_dir, convert_resource_path_to_uri } from "../utils";
 import { MessageIO } from "./MessageIO";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
@@ -185,11 +185,19 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		return message;
 	}
 
+	private clean_url(url: string) {
+		return url.replace(/file:\/\/(?!\/)/g, 'file:///');
+	}
+
 	private response_filter(message: ResponseMessage) {
 		const sentMessage = this.sentMessages.get(message.id);
+		log.info(`got from lsp: ${sentMessage.method}`)
+		log.info(JSON.stringify(message));
+
 		if (sentMessage?.method === "textDocument/hover") {
 			// fix markdown contents
 			let value: string = (message as HoverResponseMesssage).result.contents.value;
+			log.info(`value: ${JSON.stringify(value)}`);
 			if (value) {
 				// this is a dirty hack to fix language server sending us prerendered
 				// markdown but not correctly stripping leading #'s, leading to
@@ -207,7 +215,29 @@ export default class GDScriptLanguageClient extends LanguageClient {
 				value = value.replace("`csharp`", "\nC#:\n```csharp");
 				value = value.replace("`/csharp`", "```");
 
+				// Only convert plain res:// paths that aren't already in markdown links
+				value = value.replace(/(Defined in (?!\[))(\bres:\/\/[^\n\r\]]+)/g, (match, prefix, resPath) => {
+					// Create a command URI that VS Code can handle
+					const encodedPath = encodeURIComponent(JSON.stringify(resPath));
+					return `${prefix}[${resPath}](command:godotTools.openResourcePath?${encodedPath})`;
+				});
+
+				// Fix file:// URLs to have three slashes
+				value = this.clean_url(value);
+				log.info(`new value: ${JSON.stringify(value)}`);
+
 				(message as HoverResponseMesssage).result.contents.value = value;
+			}
+		} else if (sentMessage?.method === "textDocument/definition") {
+			log.info(`got from lsp: ${sentMessage.method}`)
+			log.info(JSON.stringify(message));
+
+			let value = (message as HoverResponseMesssage).result[0].uri;
+			if (value) {
+				log.info(`value: ${JSON.stringify(value)}`);
+				value = this.clean_url(value);
+				log.info(`new value: ${JSON.stringify(value)}`);
+				(message as HoverResponseMesssage).result[0].uri = value;
 			}
 		}
 
@@ -215,9 +245,23 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	}
 
 	private async check_workspace(message: ChangeWorkspaceNotification) {
+		// Check if we have a valid server path
+		if (!message?.params?.path) {
+			log.warn("No valid server path received in workspace notification");
+			return;
+		}
+
 		const server_path = path.normalize(message.params.path);
-		const client_path = path.normalize(await get_project_dir());
-		if (server_path !== client_path) {
+		const client_path = await get_project_dir();
+
+		// Check if we have a valid project directory
+		if (!client_path) {
+			log.warn("No valid Godot project directory found");
+			return;
+		}
+
+		const normalized_client_path = path.normalize(client_path);
+		if (server_path !== normalized_client_path) {
 			log.warn("Connected LSP is a different workspace");
 			this.io.socket.resetAndDestroy();
 			this.rejected = true;
@@ -232,18 +276,35 @@ export default class GDScriptLanguageClient extends LanguageClient {
 			globals.docsProvider.register_capabilities(message);
 		}
 
-		// if (message.method === "textDocument/publishDiagnostics") {
-		// 	for (const diagnostic of message.params.diagnostics) {
-		// 		if (diagnostic.code === 6) {
-		// 			log.debug("UNUSED_SIGNAL", diagnostic);
-		//             return;
-		// 		}
-		// 		if (diagnostic.code === 2) {
-		// 			log.debug("UNUSED_VARIABLE", diagnostic);
-		//             return;
-		// 		}
-		// 	}
-		// }
+		if (message.method === "textDocument/publishDiagnostics") {
+			type DiagnosticMessage = NotificationMessage & {
+				params: {
+					uri: string;
+					diagnostics: Array<{
+						message: string;
+						severity: number;
+						range: {
+							start: { line: number; character: number };
+							end: { line: number; character: number };
+						};
+						code?: number | string;
+						source?: string;
+						[key: string]: unknown;
+					}>;
+				};
+			};
+
+			const diagnosticMessage = message as DiagnosticMessage;
+
+			// Filter out the duplicate global class diagnostics
+			diagnosticMessage.params.diagnostics = diagnosticMessage.params.diagnostics.filter(diagnostic => {
+				return !diagnostic.message.includes("Unique global class") ||
+					!diagnostic.message.includes("already exists at path");
+			});
+
+			// Return the modified message with filtered diagnostics
+			return diagnosticMessage;
+		}
 
 		return message;
 	}
